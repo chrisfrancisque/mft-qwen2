@@ -8,13 +8,14 @@ import sys
 import argparse
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.train_fft import train_fft
-
 
 def main():
+    # Add src to path INSIDE main to avoid import issues with xla_multiprocessing
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+    # Import here to avoid loading torch_xla before spawn
+    from src.train_fft import train_fft
+
     parser = argparse.ArgumentParser(description="Full Fine-Tuning for Qwen2-0.5B")
 
     parser.add_argument(
