@@ -1,0 +1,47 @@
+{
+  "experiment_name": "sci_mask_qwen2_0.5b",
+  "sci": {
+    "mask_fraction": 0.05,
+    "layer_band": {
+      "start": 15,
+      "end": 17,
+      "note": "Mapped from LLaMA 20-23/32 to Qwen2 15-17/24"
+    },
+    "include_patterns": [
+      "self_attn.q_proj.weight",
+      "self_attn.k_proj.weight",
+      "self_attn.v_proj.weight",
+      "self_attn.o_proj.weight",
+      "mlp.gate_proj.weight",
+      "mlp.up_proj.weight",
+      "mlp.down_proj.weight"
+    ],
+    "exclude_patterns": [
+      "embed_tokens",
+      "norm",
+      "lm_head",
+      "rotary_emb"
+    ],
+    "gradient_batch_size": 32
+  },
+  "evaluation": {
+    "humaneval": {
+      "temperature": 0.2,
+      "top_p": 0.95,
+      "max_new_tokens": 512,
+      "n_samples": 1
+    },
+    "humaneval_plus": {
+      "temperature": 0.2,
+      "top_p": 0.95,
+      "max_new_tokens": 512,
+      "n_samples": 1
+    }
+  },
+  "paths": {
+    "fft_checkpoint": "checkpoints/fft",
+    "masked_checkpoint": "checkpoints/fft_plus_sci_mask/final",
+    "sci_scores": "logs/results/sci_scores.pt",
+    "results": "logs/results"
+  }
+}

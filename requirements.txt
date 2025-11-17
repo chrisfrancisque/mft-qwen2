@@ -1,0 +1,33 @@
+# Core dependencies for MFT-Qwen2 experiment
+# TPU v4-8 environment
+
+# PyTorch and TPU support
+torch>=2.2.0
+torch-xla[tpu]>=2.3.0
+
+# HuggingFace ecosystem
+transformers>=4.40.0
+datasets>=2.18.0
+accelerate>=0.27.0
+tokenizers>=0.15.0
+
+# Utilities
+tqdm>=4.66.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Config and serialization
+pyyaml>=6.0
+orjson>=3.9.0
+
+# Code evaluation
+# Note: HumanEval evaluation requires execution sandbox
+# Install separately: pip install human-eval
+
+# Logging and monitoring
+tensorboard>=2.15.0
+wandb>=0.16.0  # Optional: for experiment tracking
+
+# Development
+pytest>=8.0.0  # For testing
+black>=24.0.0  # Code formatting

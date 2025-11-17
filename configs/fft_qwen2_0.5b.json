@@ -1,0 +1,54 @@
+{
+  "experiment_name": "fft_qwen2_0.5b_coding",
+  "model": {
+    "name": "Qwen/Qwen2-0.5B",
+    "dtype": "bfloat16",
+    "max_length": 1024
+  },
+  "data": {
+    "datasets": [
+      {
+        "name": "evol_codealpaca",
+        "hf_path": "theblackcat102/evol-codealpaca-v1",
+        "split": "train",
+        "train_samples": 10000,
+        "grad_samples": 333
+      },
+      {
+        "name": "code_alpaca",
+        "hf_path": "sahil2801/CodeAlpaca-20k",
+        "split": "train",
+        "train_samples": 10000,
+        "grad_samples": 333
+      },
+      {
+        "name": "tulu3_persona_python",
+        "hf_path": "allenai/tulu-3-sft-personas-code",
+        "split": "train",
+        "train_samples": 10000,
+        "grad_samples": 334
+      }
+    ],
+    "seed": 42,
+    "chat_template": "qwen2"
+  },
+  "training": {
+    "num_epochs": 3,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-4,
+    "weight_decay": 0.01,
+    "warmup_steps": 100,
+    "max_grad_norm": 1.0,
+    "lr_scheduler": "cosine",
+    "save_steps": 500,
+    "eval_steps": 500,
+    "logging_steps": 50,
+    "output_dir": "checkpoints/fft"
+  },
+  "hardware": {
+    "device": "tpu",
+    "tpu_cores": 8,
+    "mixed_precision": "bf16"
+  }
+}
