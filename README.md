@@ -49,14 +49,39 @@ This project tests whether SCI-based parameter masking can improve a fully fine-
    python3 scripts/compare_results.py
    ```
 
-## Setup
+## Quick Start (TPU)
+
+**3 commands to run the complete pipeline:**
 
 ```bash
+# 1. SSH into your TPU VM
+gcloud compute tpus tpu-vm ssh YOUR_TPU_NAME --zone YOUR_ZONE
+
+# 2. Setup (clears old files, clones repo, installs deps)
+curl -sSL https://raw.githubusercontent.com/chrisfrancisque/mft-qwen2/main/scripts/setup_tpu.sh | bash
+
+# 3. Run full pipeline
+cd mft-qwen2
+bash scripts/run_full_pipeline.sh
+```
+
+**Estimated time:** 4-6 hours on TPU v4-8
+
+For detailed TPU setup instructions, troubleshooting, and monitoring, see [TPU_SETUP.md](TPU_SETUP.md)
+
+## Manual Setup
+
+```bash
+# Clone repository
+git clone https://github.com/chrisfrancisque/mft-qwen2.git
+cd mft-qwen2
+
 # Install dependencies
 pip install -r requirements.txt
-
-# For HumanEval evaluation
 pip install human-eval
+
+# Create directories
+mkdir -p data_raw data_processed checkpoints logs/results
 ```
 
 ## Datasets
