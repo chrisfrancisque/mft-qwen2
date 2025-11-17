@@ -33,8 +33,16 @@ def get_device():
 def get_world_size() -> int:
     """Get number of devices in distributed setup."""
     if is_tpu_available():
-        import torch_xla.core.xla_model as xm
-        return xm.xrt_world_size()
+        try:
+            import torch_xla.core.xla_model as xm
+            # Try new API first
+            if hasattr(xm, 'xrt_world_size'):
+                return xm.xrt_world_size()
+            # Fall back to environment variable or 1
+            else:
+                return int(os.environ.get('XRT_WORLD_SIZE', 1))
+        except Exception:
+            return 1
     elif torch.distributed.is_initialized():
         return torch.distributed.get_world_size()
     else:
@@ -44,8 +52,17 @@ def get_world_size() -> int:
 def get_rank() -> int:
     """Get rank of current process."""
     if is_tpu_available():
-        import torch_xla.core.xla_model as xm
-        return xm.get_ordinal()
+        try:
+            import torch_xla.core.xla_model as xm
+            # Try new API first
+            if hasattr(xm, 'get_ordinal'):
+                return xm.get_ordinal()
+            # Fall back to runtime API
+            elif hasattr(xm, 'xla_device'):
+                # For single-device or direct execution, return 0
+                return int(os.environ.get('XRT_SHARD_ORDINAL', 0))
+        except Exception:
+            return 0
     elif torch.distributed.is_initialized():
         return torch.distributed.get_rank()
     else:
