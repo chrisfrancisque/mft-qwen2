@@ -38,11 +38,12 @@ def main():
     args = parser.parse_args()
 
     # Spawn training on all TPU cores
+    # For PJRT, nprocs must be None (auto-detect) or 1
     xmp.spawn(
         _mp_fn,
         args=(args.config, args.data_dir, args.output_dir, args.resume_from),
-        nprocs=None,  # Use all available devices
-        start_method='fork'
+        nprocs=None,  # Auto-detect all available devices
+        start_method='spawn'  # Use 'spawn' instead of 'fork' for PJRT
     )
 
 
