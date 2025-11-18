@@ -158,14 +158,27 @@ def save_checkpoint(
 
     print_once(f"Saving checkpoint to {checkpoint_dir}...")
 
-    # Move model to CPU if on TPU (for compatibility)
+    # Force XLA sync before saving
     if is_tpu_available():
-        model_cpu = model.cpu()
-        model_cpu.save_pretrained(checkpoint_dir)
-        # Move back to device
-        model.to(get_device())
-    else:
+        import torch_xla.core.xla_model as xm
+        xm.mark_step()
+        xm.wait_device_ops()
+
+    # Save model directly without moving to CPU
+    # HuggingFace transformers handles device placement automatically
+    try:
         model.save_pretrained(checkpoint_dir)
+        print_once(f"Model saved successfully to {checkpoint_dir}")
+    except Exception as e:
+        print_once(f"Error saving model: {e}")
+        # Try alternative: save state dict directly
+        try:
+            torch.save(model.state_dict(), checkpoint_dir / "pytorch_model.bin")
+            # Also save config
+            model.config.save_pretrained(checkpoint_dir)
+            print_once(f"Model state dict saved to {checkpoint_dir}")
+        except Exception as e2:
+            print_once(f"Error saving state dict: {e2}")
 
     # Save optimizer and scheduler
     torch.save({
