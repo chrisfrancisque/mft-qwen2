@@ -164,30 +164,40 @@ def save_checkpoint(
         xm.mark_step()
         xm.wait_device_ops()
 
-    # Save model directly without moving to CPU
-    # HuggingFace transformers handles device placement automatically
-    try:
-        model.save_pretrained(checkpoint_dir)
-        print_once(f"Model saved successfully to {checkpoint_dir}")
-    except Exception as e:
-        print_once(f"Error saving model: {e}")
-        # Try alternative: save state dict directly
-        try:
-            torch.save(model.state_dict(), checkpoint_dir / "pytorch_model.bin")
-            # Also save config
-            model.config.save_pretrained(checkpoint_dir)
-            print_once(f"Model state dict saved to {checkpoint_dir}")
-        except Exception as e2:
-            print_once(f"Error saving state dict: {e2}")
-
-    # Save optimizer and scheduler
-    torch.save({
+    # Create checkpoint state
+    checkpoint_state = {
+        'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict() if scheduler else None,
-        'step': step
-    }, checkpoint_dir / "training_state.pt")
+        'step': step,
+        'is_final': is_final
+    }
 
-    print_once(f"Checkpoint saved at step {step}")
+    # Save using xm.save for XLA compatibility (handles XLA tensors properly)
+    checkpoint_path = checkpoint_dir / "checkpoint.pt"
+
+    try:
+        if is_tpu_available():
+            import torch_xla.core.xla_model as xm
+            xm.save(checkpoint_state, checkpoint_path)
+        else:
+            torch.save(checkpoint_state, checkpoint_path)
+
+        print_once(f"Checkpoint state saved successfully to {checkpoint_path}")
+    except Exception as e:
+        print_once(f"Error saving checkpoint state: {e}")
+        import traceback
+        print_once(traceback.format_exc())
+        return
+
+    # Also save model config separately for easy loading
+    try:
+        model.config.save_pretrained(checkpoint_dir)
+        print_once(f"Model config saved to {checkpoint_dir}")
+    except Exception as e:
+        print_once(f"Error saving model config: {e}")
+
+    print_once(f"✓ Checkpoint saved at step {step}")
 
 
 def load_checkpoint(

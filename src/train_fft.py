@@ -224,8 +224,14 @@ def train_fft(
         weight_decay=train_config["weight_decay"]
     )
 
-    # Setup scheduler
-    warmup_steps = train_config["warmup_steps"]
+    # Setup scheduler with dynamic warmup calculation
+    # Ensure warmup_steps doesn't exceed total_steps
+    config_warmup = train_config.get("warmup_steps", 100)
+    warmup_steps = min(config_warmup, max(1, int(0.1 * total_steps)))
+
+    if config_warmup > total_steps:
+        print_once(f"  WARNING: Config warmup_steps ({config_warmup}) > total_steps ({total_steps})")
+        print_once(f"  Adjusting warmup_steps to {warmup_steps} (10% of total or config value, whichever is smaller)")
 
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -258,13 +264,15 @@ def train_fft(
         epoch_loss = 0.0
         step_loss = 0.0
 
+        # Progress bar tracks optimizer steps, not micro-batches
         progress_bar = tqdm(
-            train_loader,
+            total=steps_per_epoch,
             desc=f"Epoch {epoch + 1}",
-            disable=not is_master()
+            disable=not is_master(),
+            unit="step"
         )
 
-        for step, batch in enumerate(progress_bar):
+        for step, batch in enumerate(train_loader):
             # Move batch to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
@@ -306,6 +314,9 @@ def train_fft(
 
                 global_step += 1
 
+                # Update progress bar (one step per optimizer step)
+                progress_bar.update(1)
+
                 # Logging
                 if global_step % train_config["logging_steps"] == 0:
                     avg_loss = step_loss / grad_accum_steps
@@ -327,6 +338,9 @@ def train_fft(
                         global_step, output_dir,
                         is_final=False
                     )
+
+        # Close progress bar
+        progress_bar.close()
 
         # End of epoch
         avg_epoch_loss = epoch_loss / len(train_loader)

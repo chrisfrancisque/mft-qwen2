@@ -39,9 +39,22 @@ python3 scripts/run_fft.py \
     --output_dir "${OUTPUT_DIR}" \
     2>&1 | tee "logs/fft_training.log"
 
-echo ""
-echo "======================================================================"
-echo "FFT Training Complete!"
-echo "======================================================================"
-echo "Checkpoint saved to: ${OUTPUT_DIR}/final"
-echo "Logs saved to: logs/fft_training.log"
+# Check if training succeeded (capture exit code from Python, not tee)
+TRAINING_EXIT_CODE=${PIPESTATUS[0]}
+
+if [ $TRAINING_EXIT_CODE -eq 0 ]; then
+    echo ""
+    echo "======================================================================"
+    echo "✓ FFT Training Complete!"
+    echo "======================================================================"
+    echo "Checkpoint saved to: ${OUTPUT_DIR}/final"
+    echo "Logs saved to: logs/fft_training.log"
+else
+    echo ""
+    echo "======================================================================"
+    echo "✗ FFT Training FAILED!"
+    echo "======================================================================"
+    echo "Exit code: $TRAINING_EXIT_CODE"
+    echo "Check logs/fft_training.log for errors"
+    exit $TRAINING_EXIT_CODE
+fi
