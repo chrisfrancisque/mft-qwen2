@@ -38,12 +38,12 @@
     "gradient_accumulation_steps": 16,
     "learning_rate": 1e-4,
     "weight_decay": 0.01,
-    "warmup_steps": 100,
+    "warmup_steps": 10,
     "max_grad_norm": 1.0,
     "lr_scheduler": "cosine",
     "save_steps": 500,
     "eval_steps": 500,
-    "logging_steps": 50,
+    "logging_steps": 10,
     "output_dir": "checkpoints/fft"
   },
   "hardware": {
