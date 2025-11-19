@@ -6,7 +6,7 @@
 #   bash scripts/run_fft_direct.sh
 #
 
-set -e
+set -eo pipefail
 
 echo "======================================================================"
 echo "MFT-Qwen2: Full Fine-Tuning on TPU v4-8 (Direct)"
