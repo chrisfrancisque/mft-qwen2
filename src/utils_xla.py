@@ -91,10 +91,10 @@ def is_master() -> bool:
     return get_rank() == 0
 
 
-def print_once(msg: str):
+def print_once(msg: str, flush: bool = False):
     """Print only from master process."""
     if is_master():
-        print(msg)
+        print(msg, flush=flush)
 
 
 def mark_step():
