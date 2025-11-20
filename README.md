@@ -14,40 +14,57 @@ This project tests whether SCI-based parameter masking can improve a fully fine-
 
 ## Pipeline
 
-1. **Data Prep**: Load 3 coding datasets (30k train, 999 gradient subset, ~2k validation)
+### Option A: Using Pre-trained Code Model (Recommended)
+
+Use Qwen2.5-Coder-0.5B-Instruct (already trained on code) to validate the SCI masking pipeline:
+
+1. **Download Code Model**: Use as baseline instead of FFT training
    ```bash
-   python3 scripts/prepare_data.py
+   python3 scripts/download_code_model.py
    ```
 
-2. **FFT**: Full fine-tune Qwen2-0.5B on 30k examples (3 epochs, TPU v4-8)
-   ```bash
-   bash scripts/run_fft_tpu.sh
-   ```
-
-3. **Eval FFT**: Baseline HumanEval/HumanEval+ pass@1
+2. **Eval Baseline**: HumanEval/HumanEval+ pass@1 on code model
    ```bash
    bash scripts/run_eval_fft.sh
    ```
 
-4. **Compute SCI**: Calculate influence scores on 999 holdout examples
+3. **Compute SCI**: Calculate influence scores on gradient subset
    ```bash
    bash scripts/run_sci.sh
    ```
 
-5. **Apply Mask**: Zero out top 5% SCI-positive parameters in target layers
+4. **Apply Mask**: Zero out top 5% SCI-positive parameters
    ```bash
    bash scripts/run_mask.sh
    ```
 
-6. **Eval Masked**: HumanEval/HumanEval+ pass@1 on masked model
+5. **Eval Masked**: HumanEval/HumanEval+ pass@1 on masked model
    ```bash
    bash scripts/eval_masked.sh
    ```
 
-7. **Compare Results**: Generate comparison table
+6. **Compare Results**: Generate comparison table
    ```bash
    python3 scripts/compare_results.py
    ```
+
+**Estimated time: ~2 hours**
+
+### Option B: With FFT Training (If TPU resources available)
+
+1. **Data Prep**: Load 3 coding datasets
+   ```bash
+   python3 scripts/prepare_data.py
+   ```
+
+2. **FFT**: Full fine-tune Qwen2-0.5B on coding data
+   ```bash
+   bash scripts/run_fft_tpu.sh
+   ```
+
+3. Continue with steps 2-6 from Option A
+
+**Estimated time: 6-8 hours**
 
 ## Quick Start (TPU)
 
