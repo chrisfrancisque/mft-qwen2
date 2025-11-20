@@ -128,7 +128,23 @@ def generate_solution(
         else:
             completion = generated_text
 
-    return completion.strip()
+    completion = completion.strip()
+
+    # Fix indentation: HumanEval expects function body to be indented
+    # The model often generates code at the wrong indentation level
+    # Add 4 spaces to each line of the completion
+    if completion:
+        lines = completion.split('\n')
+        # Indent each non-empty line with 4 spaces
+        indented_lines = []
+        for line in lines:
+            if line.strip():  # Non-empty line
+                indented_lines.append('    ' + line)
+            else:  # Empty line
+                indented_lines.append(line)
+        completion = '\n'.join(indented_lines)
+
+    return completion
 
 
 def execute_code_with_tests(
