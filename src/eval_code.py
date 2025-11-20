@@ -239,68 +239,101 @@ def evaluate_humaneval(
     # Set model to eval mode
     model.eval()
 
+    # Warm-up generation for TPU/XLA (pre-compile a smaller graph)
+    if str(device).startswith('xla'):
+        print_once("\n[DEBUG] Running warm-up generation on TPU (pre-compile XLA graph)...", flush=True)
+        import time
+        warmup_start = time.time()
+
+        dummy_prompt = "<|user|>\nWrite a Python function to add two numbers.\n<|assistant|>\n"
+        dummy_inputs = tokenizer(dummy_prompt, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            _ = model.generate(
+                **dummy_inputs,
+                max_new_tokens=16,
+                temperature=0.0,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id
+            )
+
+        try:
+            import torch_xla.core.xla_model as xm
+            xm.mark_step()
+        except Exception:
+            pass
+
+        warmup_time = time.time() - warmup_start
+        print_once(f"[DEBUG] Warm-up complete ({warmup_time:.1f}s). Starting evaluation...\n", flush=True)
+
     # Generate solutions
     results = []
     num_passed = 0
 
-    for i, problem in enumerate(tqdm(problems, desc=f"Evaluating {dataset_name}", disable=not is_master())):
-        task_id = problem["task_id"]
-        prompt_text = problem["prompt"]
-        test = problem["test"]
-        entry_point = problem["entry_point"]
+    import time
 
-        # Debug logging for first few problems
-        if i < 3:
-            print_once(f"\n[DEBUG] Starting problem {i+1}/{len(problems)}: {task_id}", flush=True)
+    with torch.no_grad():
+        for i, problem in enumerate(tqdm(problems, desc=f"Evaluating {dataset_name}", disable=not is_master())):
+            task_id = problem["task_id"]
+            prompt_text = problem["prompt"]
+            test = problem["test"]
+            entry_point = problem["entry_point"]
 
-        # Format prompt
-        formatted_prompt = format_humaneval_prompt(problem)
+            # Debug logging for first few problems
+            if i < 3:
+                print_once(f"\n[DEBUG] Starting problem {i+1}/{len(problems)}: {task_id}", flush=True)
 
-        # Generate solution
-        if i == 0:
-            print_once(f"[DEBUG] First generation starting (this may take 10-30 min for XLA compilation)...", flush=True)
+            # Format prompt
+            formatted_prompt = format_humaneval_prompt(problem)
 
-        completion = generate_solution(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=formatted_prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            device=device
-        )
+            # Generate solution with timing
+            if i == 0:
+                print_once(f"[DEBUG] First real generation starting (may still take time for full-length compile)...", flush=True)
 
-        if i == 0:
-            print_once(f"[DEBUG] First generation complete! Subsequent ones will be faster.", flush=True)
-        elif i < 3:
-            print_once(f"[DEBUG] Problem {i+1} generation complete", flush=True)
+            gen_start = time.time()
+            completion = generate_solution(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=formatted_prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                device=device
+            )
+            gen_time = time.time() - gen_start
 
-        # Combine original prompt + completion for execution
-        full_code = prompt_text + completion
+            if i == 0:
+                print_once(f"[DEBUG] First generation complete ({gen_time:.1f}s)! Subsequent ones will be faster.", flush=True)
+            elif i < 3:
+                print_once(f"[DEBUG] Problem {i+1} generation complete ({gen_time:.1f}s)", flush=True)
 
-        # Execute with tests
-        exec_result = execute_code_with_tests(full_code, test)
+            # Combine original prompt + completion for execution
+            full_code = prompt_text + completion
 
-        passed = exec_result["passed"]
-        if passed:
-            num_passed += 1
+            # Execute with tests
+            exec_result = execute_code_with_tests(full_code, test)
 
-        # Store result
-        results.append({
-            "task_id": task_id,
-            "prompt": prompt_text,
-            "completion": completion,
-            "passed": passed,
-            "error": exec_result["error"]
-        })
+            passed = exec_result["passed"]
+            if passed:
+                num_passed += 1
 
-        # Force XLA sync after each problem to prevent graph fusion
-        if str(device).startswith('xla'):
-            try:
-                import torch_xla.core.xla_model as xm
-                xm.mark_step()
-            except Exception:
-                pass
+            # Store result
+            results.append({
+                "task_id": task_id,
+                "prompt": prompt_text,
+                "completion": completion,
+                "passed": passed,
+                "error": exec_result["error"]
+            })
+
+            # Force XLA sync after each problem to prevent graph fusion
+            if str(device).startswith('xla'):
+                try:
+                    import torch_xla.core.xla_model as xm
+                    xm.mark_step()
+                except Exception:
+                    pass
 
     # Calculate metrics
     total_problems = len(problems)
