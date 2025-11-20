@@ -18,24 +18,20 @@ from .utils_xla import get_device, is_master, print_once
 
 def format_humaneval_prompt(problem: dict) -> str:
     """
-    Format HumanEval problem into Qwen chat format.
+    Format HumanEval problem for direct code completion.
+
+    For code models, we use direct completion without chat formatting
+    since HumanEval expects the model to complete the function body directly.
 
     Args:
         problem: Dict with 'prompt' field (function signature + docstring)
 
     Returns:
-        Formatted prompt string
+        Formatted prompt string (just the function signature + docstring)
     """
-    original_prompt = problem["prompt"]
-
-    formatted = (
-        "<|user|>\n"
-        "Write Python code to complete the following function.\n\n"
-        f"{original_prompt}\n"
-        "<|assistant|>\n"
-    )
-
-    return formatted
+    # For code completion models, just return the original prompt
+    # The model should complete the function body directly
+    return problem["prompt"]
 
 
 def load_humaneval_dataset(humaneval_plus: bool = False) -> List[dict]:
