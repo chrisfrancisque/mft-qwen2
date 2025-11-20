@@ -108,8 +108,19 @@ def generate_solution(
             eos_token_id=tokenizer.eos_token_id
         )
 
+    # Force XLA sync by moving to CPU immediately
+    if str(device).startswith('xla'):
+        try:
+            import torch_xla.core.xla_model as xm
+            outputs_cpu = outputs.detach().cpu()
+            xm.mark_step()
+        except Exception:
+            outputs_cpu = outputs
+    else:
+        outputs_cpu = outputs
+
     # Decode
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    generated_text = tokenizer.decode(outputs_cpu[0], skip_special_tokens=True)
 
     # Extract completion (remove prompt)
     if generated_text.startswith(prompt):
@@ -232,16 +243,23 @@ def evaluate_humaneval(
     results = []
     num_passed = 0
 
-    for problem in tqdm(problems, desc=f"Evaluating {dataset_name}", disable=not is_master()):
+    for i, problem in enumerate(tqdm(problems, desc=f"Evaluating {dataset_name}", disable=not is_master())):
         task_id = problem["task_id"]
         prompt_text = problem["prompt"]
         test = problem["test"]
         entry_point = problem["entry_point"]
 
+        # Debug logging for first few problems
+        if i < 3:
+            print_once(f"\n[DEBUG] Starting problem {i+1}/{len(problems)}: {task_id}", flush=True)
+
         # Format prompt
         formatted_prompt = format_humaneval_prompt(problem)
 
         # Generate solution
+        if i == 0:
+            print_once(f"[DEBUG] First generation starting (this may take 10-30 min for XLA compilation)...", flush=True)
+
         completion = generate_solution(
             model=model,
             tokenizer=tokenizer,
@@ -251,6 +269,11 @@ def evaluate_humaneval(
             top_p=top_p,
             device=device
         )
+
+        if i == 0:
+            print_once(f"[DEBUG] First generation complete! Subsequent ones will be faster.", flush=True)
+        elif i < 3:
+            print_once(f"[DEBUG] Problem {i+1} generation complete", flush=True)
 
         # Combine original prompt + completion for execution
         full_code = prompt_text + completion
@@ -270,6 +293,14 @@ def evaluate_humaneval(
             "passed": passed,
             "error": exec_result["error"]
         })
+
+        # Force XLA sync after each problem to prevent graph fusion
+        if str(device).startswith('xla'):
+            try:
+                import torch_xla.core.xla_model as xm
+                xm.mark_step()
+            except Exception:
+                pass
 
     # Calculate metrics
     total_problems = len(problems)
