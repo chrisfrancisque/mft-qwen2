@@ -130,19 +130,58 @@ def generate_solution(
 
     completion = completion.strip()
 
-    # Fix indentation: HumanEval expects function body to be indented
-    # The model often generates code at the wrong indentation level
-    # Add 4 spaces to each line of the completion
+    # Clean up completion: remove test code and markdown artifacts
+    # Model often generates test assertions, explanations, or markdown blocks
     if completion:
         lines = completion.split('\n')
-        # Indent each non-empty line with 4 spaces
-        indented_lines = []
+
+        # Remove everything after the function ends
+        # Stop at: unindented code, test code, markdown blocks, or explanations
+        function_lines = []
+        for line in lines:
+            stripped = line.strip()
+
+            # Stop conditions: code outside function scope
+            if stripped.startswith('# Test') or \
+               stripped.startswith('assert ') or \
+               stripped.startswith('print(') or \
+               stripped.startswith('def check') or \
+               stripped.startswith('```') or \
+               stripped.startswith('# Check') or \
+               stripped.startswith('# Example'):
+                break
+
+            function_lines.append(line)
+
+        lines = function_lines
+
+        # Fix indentation: HumanEval expects function body to be indented
+        # The model often generates code at inconsistent indentation levels
+        # Strategy: Find the minimum indentation, normalize to 0, then indent all by 4
+
+        # Find minimum indentation (ignoring empty lines)
+        min_indent = float('inf')
         for line in lines:
             if line.strip():  # Non-empty line
-                indented_lines.append('    ' + line)
+                # Count leading spaces
+                indent = len(line) - len(line.lstrip())
+                min_indent = min(min_indent, indent)
+
+        # If all lines are empty, set min_indent to 0
+        if min_indent == float('inf'):
+            min_indent = 0
+
+        # Remove minimum indentation from all lines, then add 4 spaces
+        normalized_lines = []
+        for line in lines:
+            if line.strip():  # Non-empty line
+                # Remove min_indent, then add 4 spaces
+                dedented = line[min_indent:] if len(line) >= min_indent else line
+                normalized_lines.append('    ' + dedented)
             else:  # Empty line
-                indented_lines.append(line)
-        completion = '\n'.join(indented_lines)
+                normalized_lines.append('')
+
+        completion = '\n'.join(normalized_lines)
 
     return completion
 
