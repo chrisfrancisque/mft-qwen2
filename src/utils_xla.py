@@ -21,6 +21,10 @@ def is_tpu_available() -> bool:
 
 def get_device():
     """Get appropriate device (TPU, CUDA, or CPU)."""
+    # Check if user explicitly wants CPU (for bypassing TPU issues)
+    if os.environ.get('USE_CPU', '').lower() in ('1', 'true', 'yes'):
+        return torch.device('cpu')
+
     if is_tpu_available():
         import torch_xla.core.xla_model as xm
         return xm.xla_device()

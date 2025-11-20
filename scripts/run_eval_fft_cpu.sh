@@ -37,8 +37,8 @@ echo "Note: CPU eval will be slower but more reliable than TPU."
 echo "Expected time: ~2-3 hours for both HumanEval and HumanEval+"
 echo ""
 
-# Disable TPU by unsetting PJRT_DEVICE
-unset PJRT_DEVICE
+# Force CPU usage (bypass TPU even if available)
+export USE_CPU=1
 
 python3 scripts/eval_humaneval.py \
     --config "${CONFIG_PATH}" \
