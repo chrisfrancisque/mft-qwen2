@@ -1,4 +1,4 @@
-"""
+ """
 SCI (Sign-Corrected Influence) gradient computation.
 
 Computes SCI scores for parameters in target layers:
@@ -28,7 +28,8 @@ from .utils_xla import (
 def load_gradient_examples(
     data_path: Path,
     tokenizer: AutoTokenizer,
-    max_length: int = 1024
+    max_length: int = 1024,
+    max_examples: int = None
 ) -> List[Dict[str, torch.Tensor]]:
     """
     Load and tokenize gradient subset examples.
@@ -36,10 +37,11 @@ def load_gradient_examples(
     Args:
         data_path: Path to grad_subset.jsonl
         tokenizer: Qwen2 tokenizer
-        max_length: Max sequence length
+        max_length: Max sequence length (all examples padded to this length)
+        max_examples: Optional limit on number of examples to load
 
     Returns:
-        List of tokenized examples
+        List of tokenized examples (all with same sequence length)
     """
     print_once(f"Loading gradient examples from {data_path}...")
 
@@ -50,12 +52,13 @@ def load_gradient_examples(
             item = json.loads(line)
             text = item["text"]
 
-            # Tokenize
+            # Tokenize with FIXED padding to max_length
+            # This ensures all examples have identical shape for XLA
             encoding = tokenizer(
                 text,
                 truncation=True,
                 max_length=max_length,
-                padding=False,
+                padding='max_length',  # Pad to max_length (not dynamic)
                 return_tensors="pt"
             )
 
@@ -64,7 +67,12 @@ def load_gradient_examples(
                 "attention_mask": encoding["attention_mask"].squeeze(0)
             })
 
+            # Limit number of examples if specified
+            if max_examples is not None and len(examples) >= max_examples:
+                break
+
     print_once(f"Loaded {len(examples)} gradient examples")
+    print_once(f"All examples padded to fixed length: {max_length} tokens")
 
     return examples
 
@@ -173,56 +181,61 @@ def accumulate_gradients(
     print_once(f"  Total examples: {len(examples)}")
 
     # Process in batches
-    for i in tqdm(
+    import time
+    for batch_idx, i in enumerate(tqdm(
         range(0, len(examples), batch_size),
         desc="Accumulating gradients",
         disable=not is_master()
-    ):
+    )):
+        batch_start = time.time()
         batch = examples[i:i + batch_size]
 
-        # Pad batch
+        # Debug: print timing for first batch
+        if batch_idx == 0:
+            print_once(f"\n[DEBUG] Starting first batch (XLA compilation expected)...", flush=True)
+
+        # Stack batch (all examples already padded to same length)
         input_ids_list = [ex["input_ids"] for ex in batch]
         attention_mask_list = [ex["attention_mask"] for ex in batch]
 
-        # Pad to max length in batch
-        max_len = max(ids.size(0) for ids in input_ids_list)
+        input_ids = torch.stack(input_ids_list).to(device)
+        attention_mask = torch.stack(attention_mask_list).to(device)
 
-        padded_input_ids = []
-        padded_attention_mask = []
-
-        for ids, mask in zip(input_ids_list, attention_mask_list):
-            pad_len = max_len - ids.size(0)
-            if pad_len > 0:
-                ids = torch.cat([
-                    ids,
-                    torch.full((pad_len,), tokenizer.pad_token_id, dtype=ids.dtype)
-                ])
-                mask = torch.cat([
-                    mask,
-                    torch.zeros(pad_len, dtype=mask.dtype)
-                ])
-            padded_input_ids.append(ids)
-            padded_attention_mask.append(mask)
-
-        input_ids = torch.stack(padded_input_ids).to(device)
-        attention_mask = torch.stack(padded_attention_mask).to(device)
+        if batch_idx == 0:
+            print_once(f"[DEBUG] Batch shape: {input_ids.shape} (all batches will have same shape)", flush=True)
 
         # Prepare labels
         labels = prepare_labels_for_clm(input_ids, tokenizer.pad_token_id)
 
         # Forward pass
+        if batch_idx == 0:
+            print_once(f"[DEBUG] Starting forward pass (batch shape: {input_ids.shape})...", flush=True)
+
+        forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels
         )
 
+        if batch_idx == 0:
+            print_once(f"[DEBUG] Forward pass took {time.time() - forward_start:.2f}s", flush=True)
+
         loss = outputs.loss
         total_loss += loss.item() * len(batch)
         num_examples += len(batch)
 
         # Backward pass
+        if batch_idx == 0:
+            print_once(f"[DEBUG] Starting backward pass...", flush=True)
+
+        backward_start = time.time()
         loss.backward()
+
+        if batch_idx == 0:
+            print_once(f"[DEBUG] Backward pass took {time.time() - backward_start:.2f}s", flush=True)
+            print_once(f"[DEBUG] Total batch time: {time.time() - batch_start:.2f}s", flush=True)
+            print_once(f"[DEBUG] First batch complete! Subsequent batches should be faster.\n", flush=True)
 
         # Mark step for XLA
         if is_tpu_available():
@@ -434,7 +447,8 @@ def compute_sci_and_select(
     examples = load_gradient_examples(
         data_path=grad_data_path,
         tokenizer=tokenizer,
-        max_length=sci_config.get("max_length", 1024)
+        max_length=sci_config.get("max_length", 1024),
+        max_examples=sci_config.get("max_grad_examples", None)
     )
 
     # Get target parameters

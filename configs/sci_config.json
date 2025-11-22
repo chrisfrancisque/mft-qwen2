@@ -2,6 +2,7 @@
   "experiment_name": "sci_mask_qwen2_0.5b",
   "sci": {
     "mask_fraction": 0.05,
+    "max_grad_examples": 256,
     "layer_band": {
       "start": 15,
       "end": 17,
