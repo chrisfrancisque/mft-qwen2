@@ -1,4 +1,4 @@
- """
+"""
 SCI (Sign-Corrected Influence) gradient computation.
 
 Computes SCI scores for parameters in target layers:
