@@ -316,11 +316,14 @@ def select_top_parameters(
     mask_fraction: float = 0.05
 ) -> Tuple[List[Tuple[str, int]], Dict[str, any]]:
     """
-    Select top k% parameters with highest positive SCI scores.
+    Select top k% parameters with highest positive SCI scores PER PARAMETER.
+
+    This ensures balanced masking - each parameter gets exactly k% masked,
+    preventing any single parameter from being destroyed.
 
     Args:
         sci_scores: Dict of SCI scores
-        mask_fraction: Fraction of parameters to mask (default 0.05 = 5%)
+        mask_fraction: Fraction of parameters to mask per parameter (default 0.05 = 5%)
 
     Returns:
         Tuple of:
@@ -328,74 +331,87 @@ def select_top_parameters(
             - Dict with selection statistics
     """
     print_once("=" * 80)
-    print_once("SELECTING TOP PARAMETERS")
+    print_once("SELECTING TOP PARAMETERS (PER-PARAMETER MASKING)")
     print_once("=" * 80)
 
-    # Flatten all scores and track (param_name, flat_index, score)
-    all_scores = []
-
+    top_params = []
     total_params = 0
+    total_selected = 0
+    per_param_stats = {}
 
+    # Select top k% from EACH parameter separately
     for name, scores in sci_scores.items():
         flat_scores = scores.flatten()
-        total_params += flat_scores.numel()
+        param_size = flat_scores.numel()
+        total_params += param_size
 
-        for idx, score in enumerate(flat_scores):
-            all_scores.append((name, idx, score.item()))
+        # Select top k% for this parameter
+        k = int(param_size * mask_fraction)
+
+        # Get all (index, score) pairs
+        param_scores = [(idx, score.item()) for idx, score in enumerate(flat_scores)]
+
+        # Sort by score descending
+        param_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Take top k with positive scores
+        selected_for_param = []
+        for idx, score in param_scores[:k]:
+            if score > 0:
+                top_params.append((name, idx))
+                selected_for_param.append(score)
+            else:
+                break
+
+        total_selected += len(selected_for_param)
+
+        # Track per-parameter stats
+        if selected_for_param:
+            per_param_stats[name] = {
+                "param_size": param_size,
+                "selected": len(selected_for_param),
+                "mask_ratio": len(selected_for_param) / param_size,
+                "min_score": min(selected_for_param),
+                "max_score": max(selected_for_param),
+                "mean_score": sum(selected_for_param) / len(selected_for_param)
+            }
 
     print_once(f"\nTotal parameters in target layers: {total_params:,}")
+    print_once(f"Mask fraction per parameter: {mask_fraction:.1%}")
+    print_once(f"Total parameters selected for masking: {total_selected:,}")
+    print_once(f"Overall masking ratio: {total_selected / total_params:.2%}")
 
-    # Sort by score (descending)
-    all_scores.sort(key=lambda x: x[2], reverse=True)
+    # Print per-parameter breakdown
+    print_once(f"\nPer-parameter masking breakdown:")
+    for name, pstats in per_param_stats.items():
+        print_once(f"  {name}:")
+        print_once(f"    Selected: {pstats['selected']:,}/{pstats['param_size']:,} ({pstats['mask_ratio']:.2%})")
+        print_once(f"    SCI range: [{pstats['min_score']:.4f}, {pstats['max_score']:.4f}]")
 
-    # Select top k%
-    k = int(total_params * mask_fraction)
+    # Overall statistics
+    all_scores = []
+    for name, idx in top_params:
+        # Get the actual score (need to look it up)
+        param_scores = sci_scores[name].flatten()
+        all_scores.append(param_scores[idx].item())
 
-    print_once(f"Mask fraction: {mask_fraction:.1%}")
-    print_once(f"Number of parameters to mask: {k:,}")
+    stats = {
+        "total_params": total_params,
+        "mask_fraction": mask_fraction,
+        "num_selected": total_selected,
+        "num_positive": total_selected,  # All selected are positive by construction
+        "overall_mask_ratio": total_selected / total_params,
+        "per_param_stats": per_param_stats
+    }
 
-    # Get top k with positive scores
-    top_params = []
-    num_positive = 0
-
-    for name, idx, score in all_scores[:k]:
-        if score > 0:
-            top_params.append((name, idx))
-            num_positive += 1
-        else:
-            # Stop if we hit non-positive scores
-            break
-
-    print_once(f"Parameters with positive SCI scores: {num_positive:,}")
-
-    # Statistics
-    if top_params:
-        top_scores = [all_scores[i][2] for i in range(len(top_params))]
-        stats = {
-            "total_params": total_params,
-            "mask_fraction": mask_fraction,
-            "num_selected": len(top_params),
-            "num_positive": num_positive,
-            "min_score": min(top_scores),
-            "max_score": max(top_scores),
-            "mean_score": sum(top_scores) / len(top_scores)
-        }
-
-        print_once(f"\nSelection statistics:")
-        print_once(f"  Min SCI score: {stats['min_score']:.6f}")
-        print_once(f"  Max SCI score: {stats['max_score']:.6f}")
-        print_once(f"  Mean SCI score: {stats['mean_score']:.6f}")
+    if all_scores:
+        stats["min_score"] = min(all_scores)
+        stats["max_score"] = max(all_scores)
+        stats["mean_score"] = sum(all_scores) / len(all_scores)
     else:
-        stats = {
-            "total_params": total_params,
-            "mask_fraction": mask_fraction,
-            "num_selected": 0,
-            "num_positive": 0,
-            "min_score": None,
-            "max_score": None,
-            "mean_score": None
-        }
-        print_once("\nWarning: No positive SCI scores found!")
+        stats["min_score"] = None
+        stats["max_score"] = None
+        stats["mean_score"] = None
 
     return top_params, stats
 
