@@ -29,10 +29,10 @@ def compare_predictions(baseline_dir: Path, masked_dir: Path):
     # Overall metrics
     print("\n1. OVERALL METRICS:")
     print("-" * 80)
-    for benchmark in ["humaneval", "humanevalplus"]:
+    for benchmark in ["humaneval", "humaneval_plus"]:
         if benchmark in baseline_results and benchmark in masked_results:
-            b_pass = baseline_results[benchmark].get("pass@1", 0)
-            m_pass = masked_results[benchmark].get("pass@1", 0)
+            b_pass = baseline_results[benchmark].get("pass@1", 0) * 100
+            m_pass = masked_results[benchmark].get("pass@1", 0) * 100
             print(f"\n{benchmark.upper()}:")
             print(f"  Baseline:  {b_pass:.1f}%")
             print(f"  Masked:    {m_pass:.1f}%")
