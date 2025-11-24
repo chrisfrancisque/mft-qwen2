@@ -189,6 +189,7 @@ def generate_solution(
 def execute_code_with_tests(
     code: str,
     test: str,
+    entry_point: str,
     timeout: int = 5
 ) -> Dict[str, any]:
     """
@@ -197,6 +198,7 @@ def execute_code_with_tests(
     Args:
         code: Generated code solution
         test: Test code to run
+        entry_point: Name of the function to test
         timeout: Execution timeout in seconds
 
     Returns:
@@ -229,6 +231,11 @@ def execute_code_with_tests(
             # Execute in isolated namespace
             exec_globals = {}
             exec(full_code, exec_globals)
+
+            # CRITICAL FIX: Actually call the check function!
+            # The test defines a check(candidate) function that runs assertions
+            if 'check' in exec_globals and entry_point in exec_globals:
+                exec_globals['check'](exec_globals[entry_point])
 
         # If we got here, no exception was raised
         result["passed"] = True
@@ -363,7 +370,7 @@ def evaluate_humaneval(
             full_code = prompt_text + completion
 
             # Execute with tests
-            exec_result = execute_code_with_tests(full_code, test)
+            exec_result = execute_code_with_tests(full_code, test, entry_point)
 
             passed = exec_result["passed"]
             if passed:
