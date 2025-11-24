@@ -154,9 +154,10 @@ def analyze_masked_parameters(mask_indices_path: Path, model_path: Path):
     # Load model to check actual masking
     print(f"\nLoading model from {model_path} to verify masking...")
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        str(model_path),
         torch_dtype=torch.bfloat16,
-        trust_remote_code=True
+        trust_remote_code=True,
+        local_files_only=True
     )
 
     print("\nVerifying masking per layer:")
@@ -187,11 +188,16 @@ def check_model_quality(model_path: Path, tokenizer_path: Path):
     print("="*80)
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        str(model_path),
         torch_dtype=torch.bfloat16,
-        trust_remote_code=True
+        trust_remote_code=True,
+        local_files_only=True
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(tokenizer_path),
+        trust_remote_code=True,
+        local_files_only=True
+    )
 
     # Simple test prompts
     test_prompts = [
