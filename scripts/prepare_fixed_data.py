@@ -87,25 +87,30 @@ def normalize_example(example: dict, source: str) -> dict:
 
 
 def format_to_text(example: dict) -> str:
-    """Format normalized example to training text with consistent template."""
+    """
+    Format normalized example to training text.
+
+    Uses SIMPLE code completion format (no chat template) to match HumanEval's
+    evaluation format. The model learns to complete code directly without
+    adding extra indentation or chat-style responses.
+    """
     instruction = example["instruction"]
     input_text = example.get("input", "")
     output = example["output"]
 
-    # Consistent prompt template across all datasets
+    # Simple completion format - no chat markers
+    # This matches how HumanEval prompts the model (just code, continue it)
     if input_text and input_text.strip():
+        # Include input context as a comment or docstring
         text = (
-            f"<|user|>\n"
-            f"Instruction: {instruction}\n\n"
-            f"Input:\n{input_text}\n"
-            f"<|assistant|>\n"
+            f"# Task: {instruction}\n"
+            f"# Input: {input_text}\n\n"
             f"{output}<|endoftext|>"
         )
     else:
+        # For pure code tasks, just instruction + code
         text = (
-            f"<|user|>\n"
-            f"Instruction: {instruction}\n"
-            f"<|assistant|>\n"
+            f"# Task: {instruction}\n\n"
             f"{output}<|endoftext|>"
         )
 
