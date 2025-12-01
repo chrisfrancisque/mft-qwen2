@@ -83,14 +83,16 @@ def get_device():
 def get_world_size():
     """Get number of distributed workers."""
     if HAS_XLA:
-        return xm.xrt_world_size()
+        import torch_xla.runtime as xr
+        return xr.world_size()
     return 1
 
 
 def get_rank():
     """Get current worker rank."""
     if HAS_XLA:
-        return xm.get_ordinal()
+        import torch_xla.runtime as xr
+        return xr.global_ordinal()
     return 0
 
 
