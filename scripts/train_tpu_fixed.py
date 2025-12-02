@@ -46,20 +46,24 @@ except ImportError:
 
 CONFIG = {
     "model_name": "Qwen/Qwen2-0.5B",
-    "data_path": "data_processed/train_1k_balanced.pt",
+    "data_path": "data_processed/train_1k_balanced.pt",  # Will contain 5k samples now
     "output_dir": "checkpoints/fft_tpu_fixed",
 
     # Training hyperparameters
+    # With 5000 samples, batch_size=2, grad_accum=16:
+    #   - micro_batches = 5000/2 = 2500
+    #   - steps_per_epoch = 2500/16 = 156
+    #   - total_steps = 156 * 3 = 468
     "batch_size": 2,
     "gradient_accumulation_steps": 16,
-    "num_epochs": 1,
-    "learning_rate": 1e-4,
+    "num_epochs": 3,  # Increased from 1 to 3
+    "learning_rate": 2e-5,  # Lower LR for longer training
     "weight_decay": 0.01,
     "max_grad_norm": 1.0,
 
-    # Checkpointing - frequent saves for debugging
-    "checkpoint_steps": [1, 5, 10, 15, 20, 25, 30, 31],  # Save at these steps
-    "logging_steps": 1,  # Log every step for debugging
+    # Checkpointing - save every 50 steps + key milestones
+    "checkpoint_steps": [1, 50, 100, 150, 200, 250, 300, 350, 400, 450, 468],
+    "logging_steps": 10,  # Log every 10 steps
 
     # Hardware
     "dtype": "bfloat16",
@@ -397,9 +401,11 @@ def train():
     final_path.mkdir(parents=True, exist_ok=True)
 
     # Save model in HuggingFace format
+    # Must move to CPU first for XLA compatibility
     print_master(f"Saving final model to {final_path}")
     if is_master():
-        model.save_pretrained(final_path)
+        model_cpu = model.cpu()
+        model_cpu.save_pretrained(final_path)
         tokenizer.save_pretrained(final_path)
 
     print_master(f"\nCompleted at: {datetime.now().isoformat()}")

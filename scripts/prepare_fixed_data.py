@@ -29,24 +29,25 @@ from transformers import AutoTokenizer
 
 
 # Dataset configurations with balanced sampling
+# Increased from 1000 to 5000 total samples for better training
 DATASETS = [
     {
         "name": "evol_codealpaca",
         "hf_path": "theblackcat102/evol-codealpaca-v1",
         "split": "train",
-        "samples": 334,
+        "samples": 1667,  # ~1/3 of 5000
     },
     {
         "name": "code_alpaca",
         "hf_path": "sahil2801/CodeAlpaca-20k",
         "split": "train",
-        "samples": 333,
+        "samples": 1667,  # ~1/3 of 5000
     },
     {
         "name": "tulu3_persona_python",
         "hf_path": "allenai/tulu-3-sft-personas-code",
         "split": "train",
-        "samples": 333,
+        "samples": 1666,  # ~1/3 of 5000
     },
 ]
 
