@@ -4,9 +4,9 @@
     "mask_fraction": 0.001,
     "max_grad_examples": 256,
     "layer_band": {
-      "start": 16,
-      "end": 19,
-      "note": "Trying layers 16-19"
+      "start": 19,
+      "end": 22,
+      "note": "Trying layers 19-22 (near final layers)"
     },
     "include_patterns": [
       "self_attn.q_proj.weight",
