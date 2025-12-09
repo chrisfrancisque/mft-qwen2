@@ -178,6 +178,12 @@ def main():
         help="Save the masked model to output_dir/masked_model"
     )
 
+    parser.add_argument(
+        "--cpu_eval",
+        action="store_true",
+        help="Use CPU for validation loss evaluation (avoids XLA compilation overhead)"
+    )
+
     args = parser.parse_args()
 
     # Load config
@@ -235,9 +241,22 @@ def main():
     print_once("STEP 1: EVALUATING LOSS BEFORE MASKING")
     print_once("=" * 80)
 
-    loss_before = evaluate_validation_loss(
-        model, tokenizer, val_examples, device, max_examples=50
-    )
+    # Use CPU for eval if requested (avoids XLA compilation overhead)
+    if args.cpu_eval:
+        print_once("Using CPU for validation (--cpu_eval flag set)")
+        eval_device = torch.device('cpu')
+        model_cpu = model.to(eval_device).float()  # CPU needs float32
+        loss_before = evaluate_validation_loss(
+            model_cpu, tokenizer, val_examples, eval_device, max_examples=50
+        )
+        # Move back to TPU for gradient computation
+        model = model.to(device)
+        if str(device).startswith('xla'):
+            model = model.bfloat16()
+    else:
+        loss_before = evaluate_validation_loss(
+            model, tokenizer, val_examples, device, max_examples=50
+        )
     print_once(f"\nValidation loss BEFORE masking: {loss_before:.4f}")
 
     # =========================================================================
@@ -332,9 +351,23 @@ def main():
     print_once("STEP 5: EVALUATING LOSS AFTER MASKING")
     print_once("=" * 80)
 
-    loss_after = evaluate_validation_loss(
-        model, tokenizer, val_examples, device, max_examples=50
-    )
+    # Use CPU for eval if requested (avoids XLA compilation overhead)
+    if args.cpu_eval:
+        print_once("Using CPU for validation (--cpu_eval flag set)")
+        eval_device = torch.device('cpu')
+        model_cpu = model.to(eval_device).float()  # CPU needs float32
+        loss_after = evaluate_validation_loss(
+            model_cpu, tokenizer, val_examples, eval_device, max_examples=50
+        )
+        # Keep on CPU if we're saving, otherwise move back
+        if not args.save_model:
+            model = model.to(device)
+            if str(device).startswith('xla'):
+                model = model.bfloat16()
+    else:
+        loss_after = evaluate_validation_loss(
+            model, tokenizer, val_examples, device, max_examples=50
+        )
     print_once(f"\nValidation loss AFTER masking: {loss_after:.4f}")
 
     loss_change = loss_after - loss_before
