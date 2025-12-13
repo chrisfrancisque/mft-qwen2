@@ -145,11 +145,17 @@ def compute_perplexity(
     }
 
 
-def load_model(checkpoint_path: str, device: torch.device, use_cpu: bool = False):
+def load_model(checkpoint_path: str, device: torch.device, use_cpu: bool = False, tokenizer_name: str = None):
     """Load model and tokenizer from checkpoint."""
     print_once(f"Loading model from {checkpoint_path}...")
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
+    # Load tokenizer - try checkpoint first, fall back to specified tokenizer
+    tokenizer_path = tokenizer_name or checkpoint_path
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
+    except (TypeError, OSError):
+        print_once(f"Tokenizer not found in checkpoint, using {tokenizer_path}")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
 
     if use_cpu:
         model = AutoModelForCausalLM.from_pretrained(
@@ -222,6 +228,13 @@ def main():
         help="Use CPU for evaluation (avoids XLA compilation overhead)"
     )
 
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        default="Qwen/Qwen2-0.5B",
+        help="Tokenizer to use (default: Qwen/Qwen2-0.5B)"
+    )
+
     args = parser.parse_args()
 
     # Get device
@@ -250,7 +263,7 @@ def main():
     print_once("EVALUATING FFT MODEL")
     print_once("=" * 80)
 
-    model_fft, tokenizer = load_model(args.fft_checkpoint, device, args.cpu_eval)
+    model_fft, tokenizer = load_model(args.fft_checkpoint, device, args.cpu_eval, args.tokenizer)
 
     fft_results = compute_perplexity(
         model_fft, tokenizer, examples, device,
@@ -284,7 +297,7 @@ def main():
         print_once("EVALUATING MASKED MODEL")
         print_once("=" * 80)
 
-        model_masked, _ = load_model(args.masked_checkpoint, device, args.cpu_eval)
+        model_masked, _ = load_model(args.masked_checkpoint, device, args.cpu_eval, args.tokenizer)
 
         masked_results = compute_perplexity(
             model_masked, tokenizer, examples, device,
