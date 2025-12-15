@@ -15,6 +15,7 @@ Reference: "A Simple and Effective Pruning Approach for Large Language Models"
 
 import argparse
 import json
+import math
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -338,12 +339,14 @@ def prune_wanda(
     return stats
 
 
-def check_sparsity(model: AutoModelForCausalLM) -> float:
+def check_sparsity(model: AutoModelForCausalLM, verbose: bool = True) -> Dict[str, any]:
     """Check actual sparsity of model weights."""
     layers = model.model.layers
     total_zeros = 0
     total_params = 0
+    total_model_params = sum(p.numel() for p in model.parameters())
 
+    layer_sparsities = []
     for i, layer in enumerate(layers):
         subset = find_layers(layer)
         layer_zeros = 0
@@ -356,11 +359,78 @@ def check_sparsity(model: AutoModelForCausalLM) -> float:
 
         total_zeros += layer_zeros
         total_params += layer_params
-        print(f"Layer {i}: sparsity = {layer_zeros / layer_params:.4f}")
+        layer_sparsity = layer_zeros / layer_params if layer_params > 0 else 0
+        layer_sparsities.append(layer_sparsity)
+        if verbose:
+            print(f"Layer {i}: sparsity = {layer_sparsity:.4f}")
 
-    overall = total_zeros / total_params
-    print(f"\nOverall sparsity: {overall:.4f}")
-    return overall
+    overall_linear = total_zeros / total_params if total_params > 0 else 0
+    overall_model = total_zeros / total_model_params
+
+    if verbose:
+        print(f"\nLinear layers sparsity: {overall_linear:.4f} ({overall_linear*100:.2f}%)")
+        print(f"Total model sparsity: {overall_model:.4f} ({overall_model*100:.2f}%)")
+        print(f"Weights zeroed: {total_zeros:,} / {total_params:,} (linear layers)")
+        print(f"Total model params: {total_model_params:,}")
+
+    return {
+        'linear_sparsity': overall_linear,
+        'model_sparsity': overall_model,
+        'zeros': total_zeros,
+        'linear_params': total_params,
+        'total_params': total_model_params,
+        'layer_sparsities': layer_sparsities
+    }
+
+
+@torch.no_grad()
+def evaluate_perplexity(
+    model: AutoModelForCausalLM,
+    eval_data: List[torch.Tensor],
+    device: torch.device,
+    batch_size: int = 1
+) -> Dict[str, float]:
+    """
+    Evaluate model perplexity on given data.
+
+    Args:
+        model: Model to evaluate
+        eval_data: List of tokenized examples (each is [1, seq_len])
+        device: Device to run on
+        batch_size: Batch size for evaluation
+
+    Returns:
+        Dict with loss and perplexity
+    """
+    model.eval()
+
+    total_loss = 0.0
+    total_tokens = 0
+
+    for i in tqdm(range(0, len(eval_data), batch_size), desc="Evaluating"):
+        batch = eval_data[i:i + batch_size]
+
+        for input_ids in batch:
+            input_ids = input_ids.to(device)
+
+            # Forward pass
+            outputs = model(input_ids, labels=input_ids)
+            loss = outputs.loss
+
+            # Count non-padding tokens
+            seq_len = input_ids.shape[1]
+
+            total_loss += loss.item() * (seq_len - 1)  # -1 because labels are shifted
+            total_tokens += seq_len - 1
+
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
+    perplexity = math.exp(avg_loss) if avg_loss < 100 else float('inf')
+
+    return {
+        'loss': avg_loss,
+        'perplexity': perplexity,
+        'total_tokens': total_tokens
+    }
 
 
 def main():
@@ -419,6 +489,18 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use"
     )
+    parser.add_argument(
+        "--eval_data",
+        type=str,
+        default=None,
+        help="Path to evaluation data (JSONL) for before/after perplexity. If not provided, uses calibration data."
+    )
+    parser.add_argument(
+        "--eval_samples",
+        type=int,
+        default=50,
+        help="Number of samples for evaluation (default: 50)"
+    )
 
     args = parser.parse_args()
 
@@ -470,6 +552,34 @@ def main():
         seed=args.seed
     )
 
+    # Load evaluation data (separate from calibration if provided)
+    eval_data_path = Path(args.eval_data) if args.eval_data else Path(args.calibration_data)
+    eval_data = load_calibration_data(
+        tokenizer,
+        eval_data_path,
+        nsamples=args.eval_samples,
+        seqlen=args.seqlen,
+        seed=args.seed + 1000  # Different seed for eval
+    )
+    print(f"Loaded {len(eval_data)} evaluation samples from {eval_data_path}")
+
+    # Check sparsity BEFORE pruning
+    print("\n" + "=" * 80)
+    print("SPARSITY BEFORE PRUNING")
+    print("=" * 80)
+    sparsity_before = check_sparsity(model, verbose=False)
+    print(f"Linear layers: {sparsity_before['linear_sparsity']:.4f} ({sparsity_before['linear_sparsity']*100:.2f}%)")
+    print(f"Total model: {sparsity_before['model_sparsity']:.4f} ({sparsity_before['model_sparsity']*100:.2f}%)")
+
+    # Evaluate BEFORE pruning
+    print("\n" + "=" * 80)
+    print("EVALUATION BEFORE PRUNING")
+    print("=" * 80)
+    eval_before = evaluate_perplexity(model, eval_data, device)
+    print(f"Loss: {eval_before['loss']:.4f}")
+    print(f"Perplexity: {eval_before['perplexity']:.2f}")
+    print(f"Tokens: {eval_before['total_tokens']:,}")
+
     # Prune
     print("\n" + "=" * 80)
     print("STARTING WANDA PRUNING")
@@ -483,11 +593,20 @@ def main():
         target_layers=target_layers
     )
 
-    # Verify sparsity
+    # Verify sparsity AFTER pruning
     print("\n" + "=" * 80)
-    print("VERIFYING SPARSITY")
+    print("SPARSITY AFTER PRUNING")
     print("=" * 80)
-    actual_sparsity = check_sparsity(model)
+    sparsity_after = check_sparsity(model, verbose=True)
+
+    # Evaluate AFTER pruning
+    print("\n" + "=" * 80)
+    print("EVALUATION AFTER PRUNING")
+    print("=" * 80)
+    eval_after = evaluate_perplexity(model, eval_data, device)
+    print(f"Loss: {eval_after['loss']:.4f}")
+    print(f"Perplexity: {eval_after['perplexity']:.2f}")
+    print(f"Tokens: {eval_after['total_tokens']:,}")
 
     # Save model
     output_path = Path(args.output_dir)
@@ -498,13 +617,17 @@ def main():
     tokenizer.save_pretrained(output_path)
 
     # Save stats
-    stats['actual_sparsity'] = actual_sparsity
+    stats['sparsity_before'] = sparsity_before
+    stats['sparsity_after'] = sparsity_after
+    stats['eval_before'] = eval_before
+    stats['eval_after'] = eval_after
     stats['config'] = {
         'model_path': args.model_path,
         'sparsity_ratio': args.sparsity_ratio,
         'nsamples': args.nsamples,
         'seqlen': args.seqlen,
-        'target_layers': target_layers
+        'target_layers': target_layers,
+        'eval_samples': args.eval_samples
     }
 
     stats_path = output_path.parent / f"wanda_stats_{output_path.name}.json"
@@ -512,13 +635,35 @@ def main():
         json.dump(stats, f, indent=2)
     print(f"Stats saved to {stats_path}")
 
+    # Print summary
     print("\n" + "=" * 80)
-    print("PRUNING COMPLETE")
+    print("SUMMARY")
     print("=" * 80)
-    print(f"Layers pruned: {stats['layers_pruned']}")
-    print(f"Weights pruned: {stats['total_weights_pruned']:,}")
-    print(f"Overall sparsity: {stats['overall_sparsity']:.4f}")
-    print(f"Output: {output_path}")
+    print(f"\nPruning Config:")
+    print(f"  Target layers: {target_layers if target_layers else 'ALL'}")
+    print(f"  Sparsity ratio: {args.sparsity_ratio} ({args.sparsity_ratio*100:.0f}%)")
+    print(f"  Calibration samples: {args.nsamples}")
+
+    print(f"\nSparsity:")
+    print(f"  Before: {sparsity_before['linear_sparsity']*100:.2f}% (linear layers)")
+    print(f"  After:  {sparsity_after['linear_sparsity']*100:.2f}% (linear layers)")
+    print(f"  Weights zeroed: {sparsity_after['zeros']:,} / {sparsity_after['linear_params']:,}")
+    print(f"  % of total model: {sparsity_after['model_sparsity']*100:.2f}%")
+
+    print(f"\nPerplexity:")
+    print(f"  Before: {eval_before['perplexity']:.2f}")
+    print(f"  After:  {eval_after['perplexity']:.2f}")
+    ppl_change = eval_after['perplexity'] - eval_before['perplexity']
+    ppl_pct = (ppl_change / eval_before['perplexity']) * 100
+    print(f"  Change: {ppl_change:+.2f} ({ppl_pct:+.1f}%)")
+
+    print(f"\nLoss:")
+    print(f"  Before: {eval_before['loss']:.4f}")
+    print(f"  After:  {eval_after['loss']:.4f}")
+    loss_change = eval_after['loss'] - eval_before['loss']
+    print(f"  Change: {loss_change:+.4f}")
+
+    print(f"\nOutput: {output_path}")
 
 
 if __name__ == "__main__":
