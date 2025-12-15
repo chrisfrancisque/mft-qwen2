@@ -5,15 +5,19 @@ This script:
 1. Loads both checkpoints (SCI-masked and WANDA-pruned)
 2. Analyzes the sparsity patterns
 3. Checks overlap between pruned weights
-4. Generates code samples from each to compare quality
+4. Evaluates loss/perplexity on each model
+5. Generates code samples from each to compare quality
 """
 
 import argparse
 import json
+import math
 import torch
 import torch.nn as nn
 from pathlib import Path
 from typing import Dict, List, Tuple
+from tqdm import tqdm
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
@@ -139,6 +143,45 @@ def compare_masks(mask1: Dict[str, torch.Tensor], mask2: Dict[str, torch.Tensor]
     }
 
 
+@torch.no_grad()
+def evaluate_perplexity(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
+                        device: torch.device, num_samples: int = 50) -> Dict:
+    """Evaluate model perplexity on wikitext-2."""
+    print("  Loading evaluation data...")
+    dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+
+    # Tokenize samples
+    eval_texts = [t for t in dataset["text"] if len(t.strip()) > 100][:num_samples]
+
+    total_loss = 0.0
+    total_tokens = 0
+
+    model.eval()
+
+    for text in tqdm(eval_texts, desc="  Evaluating", leave=False):
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        input_ids = inputs.input_ids.to(device)
+
+        if input_ids.shape[1] < 2:
+            continue
+
+        outputs = model(input_ids, labels=input_ids)
+        loss = outputs.loss.item()
+
+        seq_len = input_ids.shape[1]
+        total_loss += loss * (seq_len - 1)
+        total_tokens += seq_len - 1
+
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
+    perplexity = math.exp(avg_loss) if avg_loss < 100 else float('inf')
+
+    return {
+        'loss': avg_loss,
+        'perplexity': perplexity,
+        'tokens': total_tokens
+    }
+
+
 def generate_sample(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
                    prompt: str, max_new_tokens: int = 150) -> str:
     """Generate a code sample from the model."""
@@ -242,6 +285,37 @@ def main():
         wanda_to_sci_ratio = wanda_stats['total_zeros'] / sci_stats['total_zeros']
         print(f"\nWANDA removes {wanda_to_sci_ratio:.1f}x more weights than SCI")
 
+    # Evaluate perplexity on each model
+    print(f"\n{'='*60}")
+    print("PERPLEXITY EVALUATION (WikiText-2)")
+    print('='*60)
+
+    print("\nEvaluating baseline...")
+    baseline_ppl = evaluate_perplexity(baseline, tokenizer, device)
+    print(f"  Baseline - Loss: {baseline_ppl['loss']:.4f}, PPL: {baseline_ppl['perplexity']:.2f}")
+
+    print("\nEvaluating SCI...")
+    sci_ppl = evaluate_perplexity(sci_model, tokenizer, device)
+    print(f"  SCI      - Loss: {sci_ppl['loss']:.4f}, PPL: {sci_ppl['perplexity']:.2f}")
+
+    print("\nEvaluating WANDA...")
+    wanda_ppl = evaluate_perplexity(wanda_model, tokenizer, device)
+    print(f"  WANDA    - Loss: {wanda_ppl['loss']:.4f}, PPL: {wanda_ppl['perplexity']:.2f}")
+
+    # Print perplexity comparison table
+    print(f"\n{'='*60}")
+    print("PERPLEXITY COMPARISON")
+    print('='*60)
+    print(f"\n{'Model':<20} {'Loss':>12} {'Perplexity':>15} {'PPL Increase':>15}")
+    print("-"*62)
+    print(f"{'Baseline':<20} {baseline_ppl['loss']:>12.4f} {baseline_ppl['perplexity']:>15.2f} {'-':>15}")
+
+    sci_ppl_increase = (sci_ppl['perplexity'] / baseline_ppl['perplexity'] - 1) * 100 if baseline_ppl['perplexity'] > 0 else 0
+    wanda_ppl_increase = (wanda_ppl['perplexity'] / baseline_ppl['perplexity'] - 1) * 100 if baseline_ppl['perplexity'] > 0 else 0
+
+    print(f"{'SCI':<20} {sci_ppl['loss']:>12.4f} {sci_ppl['perplexity']:>15.2f} {f'+{sci_ppl_increase:.1f}%':>15}")
+    print(f"{'WANDA':<20} {wanda_ppl['loss']:>12.4f} {wanda_ppl['perplexity']:>15.2f} {f'+{wanda_ppl_increase:.1f}%':>15}")
+
     # Generate samples if requested
     generation_results = {}
     if args.generate:
@@ -285,10 +359,20 @@ def main():
             'sci_vs_baseline': sci_vs_baseline,
             'wanda_vs_baseline': wanda_vs_baseline
         },
+        'perplexity': {
+            'baseline': baseline_ppl,
+            'sci': sci_ppl,
+            'wanda': wanda_ppl,
+            'sci_ppl_increase_pct': sci_ppl_increase,
+            'wanda_ppl_increase_pct': wanda_ppl_increase
+        },
         'summary': {
             'wanda_to_sci_ratio': wanda_stats['total_zeros'] / max(1, sci_stats['total_zeros']),
             'wanda_sparsity': wanda_stats['overall_sparsity'],
             'sci_sparsity': sci_stats['overall_sparsity'],
+            'baseline_ppl': baseline_ppl['perplexity'],
+            'sci_ppl': sci_ppl['perplexity'],
+            'wanda_ppl': wanda_ppl['perplexity'],
         }
     }
 
