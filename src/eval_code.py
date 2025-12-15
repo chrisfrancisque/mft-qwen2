@@ -155,33 +155,10 @@ def generate_solution(
 
         lines = function_lines
 
-        # Fix indentation: HumanEval expects function body to be indented
-        # The model often generates code at inconsistent indentation levels
-        # Strategy: Find the minimum indentation, normalize to 0, then indent all by 4
-
-        # Find minimum indentation (ignoring empty lines)
-        min_indent = float('inf')
-        for line in lines:
-            if line.strip():  # Non-empty line
-                # Count leading spaces
-                indent = len(line) - len(line.lstrip())
-                min_indent = min(min_indent, indent)
-
-        # If all lines are empty, set min_indent to 0
-        if min_indent == float('inf'):
-            min_indent = 0
-
-        # Remove minimum indentation from all lines, then add 4 spaces
-        normalized_lines = []
-        for line in lines:
-            if line.strip():  # Non-empty line
-                # Remove min_indent, then add 4 spaces
-                dedented = line[min_indent:] if len(line) >= min_indent else line
-                normalized_lines.append('    ' + dedented)
-            else:  # Empty line
-                normalized_lines.append('')
-
-        completion = '\n'.join(normalized_lines)
+        # Don't modify indentation - pass through as-is
+        # The model should generate properly indented code
+        # Modifying indentation often breaks more than it fixes
+        completion = '\n'.join(lines)
 
     return completion
 
