@@ -155,6 +155,13 @@ def prepare_calibration_input(
             super().__init__()
             self.module = module
 
+        def __getattr__(self, name):
+            # Pass through any attribute access to the wrapped module
+            # This handles attention_type and other attributes
+            if name == 'module':
+                return super().__getattr__(name)
+            return getattr(self.module, name)
+
         def forward(self, inp, **kwargs):
             inps[cache['i']] = inp
             cache['i'] += 1
