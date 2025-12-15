@@ -19,7 +19,7 @@ import math
 import torch
 import torch.nn as nn
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -126,70 +126,6 @@ def load_calibration_data(
     return calibration_data
 
 
-def prepare_calibration_input(
-    model: AutoModelForCausalLM,
-    calibration_data: List[torch.Tensor],
-    device: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Prepare calibration inputs by running through embeddings and capturing layer inputs.
-    """
-    print("Preparing calibration inputs...")
-
-    use_cache = model.config.use_cache
-    model.config.use_cache = False
-
-    layers = model.model.layers
-    nsamples = len(calibration_data)
-    seqlen = calibration_data[0].shape[1]
-    hidden_size = model.config.hidden_size
-    dtype = next(iter(model.parameters())).dtype
-
-    # Storage for layer inputs
-    inps = torch.zeros((nsamples, seqlen, hidden_size), dtype=dtype, device=device)
-    cache = {'i': 0, 'attention_mask': None, 'position_ids': None}
-
-    class Catcher(nn.Module):
-        """Catch inputs to first transformer layer."""
-        def __init__(self, module):
-            super().__init__()
-            self.module = module
-
-        def __getattr__(self, name):
-            # Pass through any attribute access to the wrapped module
-            # This handles attention_type and other attributes
-            if name == 'module':
-                return super().__getattr__(name)
-            return getattr(self.module, name)
-
-        def forward(self, inp, **kwargs):
-            inps[cache['i']] = inp
-            cache['i'] += 1
-            cache['attention_mask'] = kwargs.get('attention_mask')
-            cache['position_ids'] = kwargs.get('position_ids')
-            raise ValueError  # Stop forward pass
-
-    # Replace first layer with catcher
-    layers[0] = Catcher(layers[0])
-
-    for i, input_ids in enumerate(calibration_data):
-        try:
-            model(input_ids.to(device))
-        except ValueError:
-            pass
-
-    # Restore first layer
-    layers[0] = layers[0].module
-
-    outs = torch.zeros_like(inps)
-    attention_mask = cache['attention_mask']
-    position_ids = cache['position_ids']
-
-    model.config.use_cache = use_cache
-
-    return inps, outs, attention_mask, position_ids
-
-
 def prune_wanda(
     model: AutoModelForCausalLM,
     calibration_data: List[torch.Tensor],
@@ -200,7 +136,10 @@ def prune_wanda(
     prune_m: int = 0
 ) -> Dict[str, any]:
     """
-    Apply WANDA pruning to model.
+    Apply WANDA pruning to model using forward hooks.
+
+    This version uses hooks to collect activations during a full forward pass,
+    which is more compatible with newer transformers versions.
 
     Args:
         model: Model to prune
@@ -215,14 +154,57 @@ def prune_wanda(
     """
     use_cache = model.config.use_cache
     model.config.use_cache = False
-
-    # Prepare calibration inputs
-    inps, outs, attention_mask, position_ids = prepare_calibration_input(
-        model, calibration_data, device
-    )
+    model.eval()
 
     layers = model.model.layers
-    nsamples = len(calibration_data)
+
+    # Determine which layers to prune
+    if target_layers is None:
+        target_layers = list(range(len(layers)))
+
+    print(f"\nPruning with sparsity ratio: {sparsity_ratio}")
+    print(f"Target layers: {target_layers}")
+
+    # Collect activation statistics for all target layers using hooks
+    print("Collecting activation statistics...")
+
+    # Storage for activation wrappers
+    all_wrapped_layers = {}
+    all_handles = []
+
+    # Set up hooks for all target layers
+    for i in target_layers:
+        layer = layers[i]
+        subset = find_layers(layer)
+
+        for name in subset:
+            full_name = f"layer_{i}_{name}"
+            all_wrapped_layers[full_name] = {
+                'wrapper': ActivationWrapper(subset[name]),
+                'layer_idx': i,
+                'name': name,
+                'module': subset[name]
+            }
+
+            def make_hook(wrapper_info):
+                def hook(_, inp, out):
+                    wrapper_info['wrapper'].add_batch(inp[0].data, out.data)
+                return hook
+
+            handle = subset[name].register_forward_hook(make_hook(all_wrapped_layers[full_name]))
+            all_handles.append(handle)
+
+    # Run forward passes to collect activation statistics
+    for input_ids in tqdm(calibration_data, desc="Collecting activations"):
+        with torch.no_grad():
+            model(input_ids.to(device))
+
+    # Remove all hooks
+    for h in all_handles:
+        h.remove()
+
+    # Now prune based on collected statistics
+    print("Applying pruning masks...")
 
     stats = {
         'layers_pruned': 0,
@@ -231,67 +213,21 @@ def prune_wanda(
         'layer_stats': {}
     }
 
-    print(f"\nPruning with sparsity ratio: {sparsity_ratio}")
-    if target_layers:
-        print(f"Target layers: {target_layers}")
-
-    for i in tqdm(range(len(layers)), desc="Pruning layers"):
+    for i in tqdm(target_layers, desc="Pruning layers"):
         layer = layers[i]
-
-        # Skip non-target layers if specified
-        if target_layers is not None and i not in target_layers:
-            # Still need to pass through layer to update inps
-            for j in range(nsamples):
-                with torch.no_grad():
-                    outs[j] = layer(
-                        inps[j].unsqueeze(0),
-                        attention_mask=attention_mask,
-                        position_ids=position_ids
-                    )[0]
-            inps, outs = outs, inps
-            continue
-
-        # Find linear layers in this transformer layer
         subset = find_layers(layer)
 
-        # Wrap layers to collect activation statistics
-        wrapped_layers = {}
-        for name in subset:
-            wrapped_layers[name] = ActivationWrapper(subset[name])
-
-        # Register hooks to collect activations
-        def add_batch(name):
-            def tmp(_, inp, out):
-                wrapped_layers[name].add_batch(inp[0].data, out.data)
-            return tmp
-
-        handles = []
-        for name in wrapped_layers:
-            handles.append(subset[name].register_forward_hook(add_batch(name)))
-
-        # Forward pass to collect activations
-        for j in range(nsamples):
-            with torch.no_grad():
-                outs[j] = layer(
-                    inps[j].unsqueeze(0),
-                    attention_mask=attention_mask,
-                    position_ids=position_ids
-                )[0]
-
-        # Remove hooks
-        for h in handles:
-            h.remove()
-
-        # Prune each linear layer
         layer_pruned = 0
         layer_total = 0
 
         for name in subset:
+            full_name = f"layer_{i}_{name}"
+            wrapper_info = all_wrapped_layers[full_name]
             W = subset[name].weight.data
 
             # WANDA metric: |W| * sqrt(activation_norm)
             # scaler_row contains squared L2 norms, so we take sqrt
-            W_metric = torch.abs(W) * torch.sqrt(wrapped_layers[name].scaler_row.reshape((1, -1)))
+            W_metric = torch.abs(W) * torch.sqrt(wrapper_info['wrapper'].scaler_row.reshape((1, -1)))
 
             # Create mask (True = prune)
             W_mask = torch.zeros_like(W_metric, dtype=torch.bool)
@@ -328,16 +264,6 @@ def prune_wanda(
             'total': layer_total,
             'sparsity': layer_pruned / layer_total if layer_total > 0 else 0
         }
-
-        # Update inputs for next layer
-        for j in range(nsamples):
-            with torch.no_grad():
-                outs[j] = layer(
-                    inps[j].unsqueeze(0),
-                    attention_mask=attention_mask,
-                    position_ids=position_ids
-                )[0]
-        inps, outs = outs, inps
 
     model.config.use_cache = use_cache
 
