@@ -6,7 +6,7 @@ Handles 3 datasets:
 - Code-Alpaca
 - Tulu 3 Persona Python
 
-Normalizes to common schema and applies stratified sampling.
+Normalizes to messages format (matching MFT repo) for proper label masking.
 """
 
 import json
@@ -16,62 +16,72 @@ from typing import Dict, List, Tuple
 from datasets import load_dataset, Dataset
 from tqdm import tqdm
 
-from .prompts import format_instruction_prompt, format_chat_messages
-
 
 def normalize_evol_codealpaca(example: dict) -> dict:
-    """Normalize Evol CodeAlpaca to common schema."""
+    """Normalize Evol CodeAlpaca to messages format."""
+    instruction = example.get("instruction", "")
+    input_text = example.get("input", "")
+    output = example.get("output", "")
+
+    # Build user content
+    if input_text and input_text.strip():
+        user_content = f"{instruction}\n\nInput:\n{input_text}"
+    else:
+        user_content = instruction
+
     return {
         "source": "evol_codealpaca",
-        "instruction": example.get("instruction", ""),
-        "input": example.get("input", ""),
-        "output": example.get("output", "")
+        "messages": [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": output}
+        ]
     }
 
 
 def normalize_code_alpaca(example: dict) -> dict:
-    """Normalize Code-Alpaca to common schema."""
+    """Normalize Code-Alpaca to messages format."""
+    instruction = example.get("instruction", "")
+    input_text = example.get("input", "")
+    output = example.get("output", "")
+
+    # Build user content
+    if input_text and input_text.strip():
+        user_content = f"{instruction}\n\nInput:\n{input_text}"
+    else:
+        user_content = instruction
+
     return {
         "source": "code_alpaca",
-        "instruction": example.get("instruction", ""),
-        "input": example.get("input", ""),
-        "output": example.get("output", "")
+        "messages": [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": output}
+        ]
     }
 
 
 def normalize_tulu3_persona_python(example: dict) -> dict:
     """
-    Normalize Tulu 3 Persona Python to common schema.
+    Normalize Tulu 3 Persona Python to messages format.
 
-    Tulu 3 uses 'messages' format with role/content.
+    Tulu 3 already uses 'messages' format with role/content.
     """
-    # Extract from messages if present
     if "messages" in example:
-        messages = example["messages"]
-
-        # Find user and assistant messages
-        user_msg = ""
-        assistant_msg = ""
-
-        for msg in messages:
-            if msg.get("role") == "user":
-                user_msg = msg.get("content", "")
-            elif msg.get("role") == "assistant":
-                assistant_msg = msg.get("content", "")
-
+        # Already in messages format, just pass through
         return {
             "source": "tulu3_persona_python",
-            "instruction": user_msg,
-            "input": "",
-            "output": assistant_msg
+            "messages": example["messages"]
         }
     else:
         # Fallback for other formats
+        instruction = example.get("instruction", example.get("prompt", ""))
+        output = example.get("output", example.get("completion", ""))
+
         return {
             "source": "tulu3_persona_python",
-            "instruction": example.get("instruction", example.get("prompt", "")),
-            "input": example.get("input", ""),
-            "output": example.get("output", example.get("completion", ""))
+            "messages": [
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": output}
+            ]
         }
 
 
@@ -169,19 +179,6 @@ def split_dataset(
     return train_dataset, grad_dataset, val_dataset
 
 
-def apply_formatting(example: dict) -> dict:
-    """Apply prompt formatting to a normalized example."""
-    formatted = format_instruction_prompt(
-        instruction=example["instruction"],
-        input_text=example.get("input", ""),
-        output=example["output"]
-    )
-
-    # Merge with original
-    return {
-        **example,
-        **formatted
-    }
 
 
 def save_dataset_jsonl(dataset: Dataset, output_path: Path):

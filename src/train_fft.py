@@ -34,7 +34,7 @@ from .utils_xla import (
     prepare_labels_for_clm,
     MetricsTracker
 )
-from .tokenization import load_qwen2_tokenizer, collate_fn
+from .tokenization import load_qwen2_tokenizer, collate_fn, encode_sft_example, collate_sft_batch
 
 
 class CodingDataset(torch.utils.data.Dataset):
@@ -68,7 +68,8 @@ def create_dataloader(
     batch_size: int,
     max_length: int = 1024,
     shuffle: bool = True,
-    num_workers: int = 0
+    num_workers: int = 0,
+    use_sft_encoding: bool = True
 ) -> DataLoader:
     """
     Create DataLoader for training.
@@ -80,6 +81,7 @@ def create_dataloader(
         max_length: Maximum sequence length
         shuffle: Whether to shuffle (handled by DistributedSampler)
         num_workers: Number of data loading workers
+        use_sft_encoding: Use SFT encoding with label masking (matching MFT repo)
 
     Returns:
         DataLoader
@@ -96,17 +98,23 @@ def create_dataloader(
 
     tokenized = []
     for ex in tqdm(examples, desc="Tokenizing", disable=not is_master()):
-        tokenized_ex = tokenizer(
-            ex["text"],
-            truncation=True,
-            max_length=max_length,
-            padding=False,
-            return_tensors=None
-        )
-        tokenized.append({
-            "input_ids": tokenized_ex["input_ids"],
-            "attention_mask": tokenized_ex["attention_mask"]
-        })
+        if use_sft_encoding and "messages" in ex:
+            # Use SFT encoding with label masking (only train on assistant responses)
+            tokenized_ex = encode_sft_example(ex, tokenizer, max_length)
+            tokenized.append(tokenized_ex)
+        else:
+            # Legacy: tokenize full text without label masking
+            tokenized_ex = tokenizer(
+                ex["text"],
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+                return_tensors=None
+            )
+            tokenized.append({
+                "input_ids": tokenized_ex["input_ids"],
+                "attention_mask": tokenized_ex["attention_mask"]
+            })
 
     # Create dataset
     dataset = CodingDataset(tokenized)
@@ -123,13 +131,19 @@ def create_dataloader(
         seed=42
     )
 
+    # Choose collate function based on encoding
+    if use_sft_encoding and "messages" in examples[0]:
+        collate = lambda batch: collate_sft_batch(batch, tokenizer.pad_token_id)
+    else:
+        collate = lambda batch: collate_fn(batch, tokenizer.pad_token_id)
+
     # Create dataloader
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         sampler=sampler,
         num_workers=num_workers,
-        collate_fn=lambda batch: collate_fn(batch, tokenizer.pad_token_id),
+        collate_fn=collate,
         drop_last=True  # For consistent batch sizes
     )
 
@@ -277,8 +291,13 @@ def train_fft(
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
-            # Prepare labels for CLM
-            labels = prepare_labels_for_clm(input_ids, tokenizer.pad_token_id)
+            # Get labels - either from batch (SFT encoding) or prepare for CLM
+            if "labels" in batch:
+                # SFT encoding: labels already have non-assistant tokens masked
+                labels = batch["labels"].to(device)
+            else:
+                # Legacy: prepare labels for CLM (masks padding only)
+                labels = prepare_labels_for_clm(input_ids, tokenizer.pad_token_id)
 
             # Forward pass
             outputs = model(
