@@ -21,7 +21,11 @@ from transformers import (
 )
 from torch.utils.data import DataLoader, DistributedSampler
 
-from .utils_xla import (
+import sys
+from pathlib import Path as _Path
+sys.path.insert(0, str(_Path(__file__).parent.parent))
+
+from src.utils_xla import (
     get_device,
     get_world_size,
     get_rank,
@@ -34,7 +38,7 @@ from .utils_xla import (
     prepare_labels_for_clm,
     MetricsTracker
 )
-from .tokenization import load_qwen2_tokenizer, collate_fn, encode_sft_example, collate_sft_batch
+from src.tokenization import load_qwen2_tokenizer, collate_fn, encode_sft_example, collate_sft_batch
 
 
 class CodingDataset(torch.utils.data.Dataset):
@@ -493,8 +497,10 @@ def train_fft_simple(
 
         train_sampler.set_epoch(epoch)
 
-        epoch_loss = 0.0
-        step_loss = 0.0
+        # Use tensors for loss accumulation (avoid .item() before mark_step on XLA)
+        epoch_loss = torch.tensor(0.0, device=device)
+        step_loss = torch.tensor(0.0, device=device)
+        num_batches = 0
 
         progress_bar = tqdm(
             total=steps_per_epoch,
@@ -524,8 +530,9 @@ def train_fft_simple(
             loss = outputs.loss / grad_accum_steps
             loss.backward()
 
-            step_loss += loss.item()
-            epoch_loss += loss.item()
+            # Accumulate loss tensor (don't call .item() yet - causes XLA hang)
+            step_loss += loss.detach()
+            epoch_loss += loss.detach()
 
             # Optimizer step every grad_accum_steps
             if (step + 1) % grad_accum_steps == 0:
@@ -539,9 +546,9 @@ def train_fft_simple(
                 global_step += 1
                 progress_bar.update(1)
 
-                # Logging
+                # Logging - safe to call .item() after mark_step()
                 if global_step % logging_steps == 0:
-                    avg_loss = step_loss / grad_accum_steps
+                    avg_loss = step_loss.item() / grad_accum_steps
                     current_lr = scheduler.get_last_lr()[0]
 
                     print_once(
@@ -551,7 +558,7 @@ def train_fft_simple(
                     )
 
                     metrics_tracker.update(global_step, avg_loss, current_lr)
-                    step_loss = 0.0
+                    step_loss = torch.tensor(0.0, device=device)
 
                 # Save checkpoint
                 if global_step % save_steps == 0:
@@ -561,8 +568,11 @@ def train_fft_simple(
                         is_final=False
                     )
 
+            num_batches += 1
+
         progress_bar.close()
-        avg_epoch_loss = epoch_loss / len(train_loader)
+        mark_step()  # Ensure computation is done before calling .item()
+        avg_epoch_loss = epoch_loss.item() / num_batches
         print_once(f"Epoch {epoch + 1} completed | Avg Loss: {avg_epoch_loss:.4f}")
 
     # Save final checkpoint
